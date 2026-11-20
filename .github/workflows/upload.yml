@@ -1,0 +1,87 @@
+name: Download and Upload to Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Magnet link یا URL مستقیم'
+        required: true
+        default: 'magnet:?xt=urn:btih:0e1610f5c681bbe8e908ddb7f73dc890899994f4&dn=gta%20v%20source%20code&tr=udp%3a%2f%2ftracker.opentrackr.org%3a1337%2fannounce'
+      chunk_mb:
+        description: 'اندازه هر تکه (مگابایت، حداکثر 1900 برای اکانت عادی)'
+        required: true
+        default: '1900'
+      caption_prefix:
+        description: 'پیشوند کپشن'
+        required: false
+        default: 'GTAVSP'
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: نصب پیش‌نیازها
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 python3-pip
+          pip install --quiet telethon
+
+      - name: دانلود
+        env:
+          SOURCE: ${{ github.event.inputs.source }}
+        run: |
+          mkdir -p downloads chunks
+          echo "▶️ شروع دانلود:"
+          echo "$SOURCE"
+
+          if [[ "$SOURCE" == magnet:* ]]; then
+            aria2c \
+              --dir=downloads \
+              --seed-time=0 \
+              --file-allocation=none \
+              --max-connection-per-server=16 \
+              --bt-max-peers=100 \
+              --summary-interval=30 \
+              --console-log-level=warn \
+              "$SOURCE"
+          else
+            aria2c \
+              --dir=downloads \
+              --file-allocation=none \
+              --max-connection-per-server=16 \
+              --summary-interval=30 \
+              --console-log-level=warn \
+              "$SOURCE"
+          fi
+
+          echo "✅ دانلود تمام شد."
+          ls -lh downloads/
+
+      - name: تکه‌تکه کردن فایل‌ها
+        env:
+          CHUNK_MB: ${{ github.event.inputs.chunk_mb }}
+        run: |
+          cd downloads
+          for f in *; do
+            if [ -f "$f" ]; then
+              echo "✂️ تکه‌تکه کردن: $f"
+              split -b "${CHUNK_MB}M" -d --verbose "$f" "../chunks/${f}.part_"
+            fi
+          done
+          cd ..
+          echo "✅ تکه‌ها آماده‌اند:"
+          ls -lh chunks/ | head -20
+
+      - name: آپلود به تلگرام
+        env:
+          API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          CAPTION_PREFIX: ${{ github.event.inputs.caption_prefix }}
+        run: |
+          python3 scripts/upload.py
