@@ -1,0 +1,74 @@
+
+name: Redownload Torrent and Compare SHA1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install aria2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2
+
+      - name: Download torrent
+        shell: bash
+        run: |
+          mkdir -p downloads
+
+          MAGNET='magnet:?xt=urn:btih:0e1610f5c681bbe8e908ddb7f73dc890899994f4&dn=gta%20v%20source%20code&tr=udp%3a%2f%2ftracker.opentrackr.org%3a1337%2fannounce'
+
+          aria2c \
+            --dir=downloads \
+            --continue=true \
+            --seed-time=0 \
+            --file-allocation=none \
+            --summary-interval=30 \
+            --console-log-level=notice \
+            "$MAGNET"
+
+      - name: Find file and compare SHA1
+        shell: bash
+        run: |
+          EXPECTED="ca39323730ed644fa534a2946506d4287f92a799"
+
+          FILE=$(find downloads -type f -name "GTAVSP.7z" -print -quit)
+
+          if [ -z "$FILE" ]; then
+            echo "ERROR: GTAVSP.7z not found"
+            find downloads -type f
+            exit 1
+          fi
+
+          echo "File: $FILE"
+          echo "Size:"
+          stat -c '%s bytes' "$FILE"
+
+          ACTUAL=$(sha1sum "$FILE" | awk '{print $1}')
+
+          echo "Expected SHA1: $EXPECTED"
+          echo "Actual SHA1:   $ACTUAL"
+
+          if [ "$ACTUAL" = "$EXPECTED" ]; then
+            echo "RESULT: MATCH"
+          else
+            echo "RESULT: MISMATCH"
+            exit 1
+          fi
+
+      - name: Upload downloaded file
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTAVSP-download
+          path: downloads/
+          compression-level: 0
+          if-no-files-found: warn
+          retention-days: 1
