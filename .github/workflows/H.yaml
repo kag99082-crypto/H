@@ -1,0 +1,64 @@
+
+name: Download Raw Malware Sample
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: windows-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Create Lab
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\Lab
+
+      - name: Fetch raw responses only
+        shell: pwsh
+        run: |
+          $url = "https://get.activate.win/"
+
+          # Ordinary HTTP client response
+          curl.exe -sS -L `
+            --max-redirs 3 `
+            --max-time 60 `
+            --proto "=https" `
+            --proto-redir "=https" `
+            -D C:\Lab\browser_headers.txt `
+            -o C:\Lab\browser_response.bin `
+            -w "Browser HTTP status: %{http_code}`n" `
+            $url
+
+          # PowerShell-like User-Agent response
+          curl.exe -sS -L `
+            --max-redirs 3 `
+            --max-time 60 `
+            --proto "=https" `
+            --proto-redir "=https" `
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WindowsPowerShell/5.1" `
+            -D C:\Lab\powershell_headers.txt `
+            -o C:\Lab\powershell_response.bin `
+            -w "PowerShell UA HTTP status: %{http_code}`n" `
+            $url
+
+          # Hashes and file sizes
+          Get-ChildItem C:\Lab -File |
+            ForEach-Object {
+              Write-Host "File: $($_.Name)"
+              Write-Host "Size: $($_.Length)"
+              Get-FileHash $_.FullName -Algorithm SHA256
+            }
+
+      - name: Upload raw files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-malware-responses
+          path: C:\Lab\
+          retention-days: 1
+          if-no-files-found: warn
