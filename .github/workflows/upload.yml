@@ -1,3 +1,4 @@
+
 name: Download and Upload to Telegram
 
 on:
@@ -8,7 +9,7 @@ on:
         required: true
         default: 'magnet:?xt=urn:btih:0e1610f5c681bbe8e908ddb7f73dc890899994f4&dn=gta%20v%20source%20code&tr=udp%3a%2f%2ftracker.opentrackr.org%3a1337%2fannounce'
       chunk_mb:
-        description: 'اندازه هر تکه (مگابایت، حداکثر 1900 برای اکانت عادی)'
+        description: 'اندازه هر تکه (مگابایت)'
         required: true
         default: '1900'
       caption_prefix:
@@ -20,6 +21,7 @@ jobs:
   transfer:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +37,7 @@ jobs:
           SOURCE: ${{ github.event.inputs.source }}
         run: |
           mkdir -p downloads chunks
+
           echo "▶️ شروع دانلود:"
           echo "$SOURCE"
 
@@ -59,22 +62,61 @@ jobs:
           fi
 
           echo "✅ دانلود تمام شد."
-          ls -lh downloads/
 
-      - name: تکه‌تکه کردن فایل‌ها
+          echo "📁 فایل‌های دانلود شده:"
+          find downloads -type f -printf '%p (%s bytes)\n'
+
+          if ! find downloads -type f -print -quit | grep -q .; then
+            echo "❌ هیچ فایلی دانلود نشده است."
+            exit 1
+          fi
+
+      - name: تقسیم فایل‌ها
         env:
           CHUNK_MB: ${{ github.event.inputs.chunk_mb }}
         run: |
-          cd downloads
-          for f in *; do
-            if [ -f "$f" ]; then
-              echo "✂️ تکه‌تکه کردن: $f"
-              split -b "${CHUNK_MB}M" -d --verbose "$f" "../chunks/${f}.part_"
-            fi
+          set -euo pipefail
+
+          mkdir -p chunks
+
+          if ! [[ "$CHUNK_MB" =~ ^[0-9]+$ ]] || [ "$CHUNK_MB" -lt 1 ] || [ "$CHUNK_MB" -gt 1900 ]; then
+            echo "❌ اندازه تکه باید بین 1 تا 1900 مگابایت باشد."
+            exit 1
+          fi
+
+          echo "✂️ شروع تقسیم فایل‌ها..."
+
+          find downloads -type f -print0 |
+          while IFS= read -r -d '' file; do
+
+            filename=$(basename "$file")
+
+            echo "📦 فایل: $file"
+
+            split \
+              -b "${CHUNK_MB}M" \
+              -d \
+              --numeric-suffixes=0 \
+              --suffix-length=3 \
+              "$file" \
+              "chunks/${filename}.part_"
+
           done
-          cd ..
-          echo "✅ تکه‌ها آماده‌اند:"
-          ls -lh chunks/ | head -20
+
+          echo "📊 نتیجه تقسیم:"
+
+          find chunks -type f -printf '%f (%s bytes)\n'
+
+          COUNT=$(find chunks -type f | wc -l)
+
+          echo "تعداد تکه‌ها: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ هیچ تکه‌ای ساخته نشد."
+            exit 1
+          fi
+
+          echo "✅ تقسیم فایل‌ها موفق بود."
 
       - name: آپلود به تلگرام
         env:
