@@ -1,5 +1,5 @@
 
-name: Inspect Suspicious Domain Redirect
+name: Download Response
 
 on:
   workflow_dispatch:
@@ -8,61 +8,41 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  download:
     runs-on: windows-latest
 
     steps:
-      - name: Prepare lab directory
+      - name: Download response
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path C:\Lab | Out-Null
+          New-Item -ItemType Directory -Force C:\Lab | Out-Null
 
-      - name: Inspect HTTPS response without following redirects
-        shell: pwsh
-        run: |
-          $url = "https://get.activate.win/"
-
-          Write-Host "Target: $url"
+          $url = "http://activate.win/"
 
           curl.exe `
-            --silent `
-            --show-error `
-            --max-time 25 `
-            --max-redirs 0 `
-            --dump-header C:\Lab\response_headers.txt `
-            --output NUL `
-            --write-out "HTTP status: %{http_code}`nRedirect target: %{redirect_url}`n" `
+            --location `
+            --max-redirs 5 `
+            --proto "=http,https" `
+            --proto-redir "=http,https" `
+            --max-time 60 `
+            --dump-header C:\Lab\headers.txt `
+            --output C:\Lab\response.bin `
+            --write-out "`nHTTP status: %{http_code}`nFinal URL: %{url_effective}`nDownloaded: %{size_download} bytes`n" `
             "$url"
 
-          Write-Host "`n--- Response headers ---"
-
-          if (Test-Path C:\Lab\response_headers.txt) {
-            Get-Content C:\Lab\response_headers.txt
+          if ($LASTEXITCODE -ne 0) {
+            throw "Download failed: curl exit code $LASTEXITCODE"
           }
 
-      - name: Save inspection metadata
-        if: always()
-        shell: pwsh
-        run: |
-          $file = "C:\Lab\response_headers.txt"
+          Get-FileHash C:\Lab\response.bin -Algorithm SHA256
+          Get-Item C:\Lab\response.bin |
+            Select-Object Name, Length
 
-          if (Test-Path $file) {
-            $hash = (Get-FileHash $file -Algorithm SHA256).Hash
-            $size = (Get-Item $file).Length
-
-            @"
-          Target: https://get.activate.win/
-          Collected: $(Get-Date -Format o)
-          Header file size: $size
-          Header SHA256: $hash
-          "@ | Out-File C:\Lab\metadata.txt -Encoding utf8
-          }
-
-      - name: Upload inspection results
+      - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: redirect-inspection
+          name: downloaded-response
           path: C:\Lab\
           if-no-files-found: warn
           retention-days: 3
