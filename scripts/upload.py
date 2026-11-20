@@ -1,58 +1,21 @@
 
-#!/usr/bin/env python3
-
-import asyncio
 import os
-import sys
+import asyncio
 from pathlib import Path
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.channels import CreateChannelRequest
 from telethon.errors import FloodWaitError
 from telethon.tl.types import DocumentAttributeFilename
-
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION = os.environ["SESSION_STRING"]
-CHANNEL = os.environ["CHANNEL_ID"]
 
-PREFIX = os.environ.get("CAPTION_PREFIX", "part")
-
-CHUNKS_DIR = Path("chunks")
-STATE_FILE = Path("uploaded.txt")
-
-
-def load_uploaded():
-    if STATE_FILE.exists():
-        return set(STATE_FILE.read_text().splitlines())
-    return set()
-
-
-def mark_uploaded(name):
-    with STATE_FILE.open("a") as f:
-        f.write(name + "\n")
-
+CHUNKS = Path("chunks")
 
 async def main():
-
-    if not CHUNKS_DIR.exists():
-        print("❌ پوشه chunks پیدا نشد.")
-        return 1
-
-    files = sorted(
-        p for p in CHUNKS_DIR.rglob("*")
-        if p.is_file()
-    )
-
-    if not files:
-        print("❌ هیچ فایلی برای آپلود وجود ندارد.")
-        return 1
-
-    uploaded = load_uploaded()
-
-    print(f"📦 تعداد کل تکه‌ها: {len(files)}")
-
     client = TelegramClient(
         StringSession(SESSION),
         API_ID,
@@ -62,90 +25,96 @@ async def main():
     await client.start()
 
     me = await client.get_me()
+    print(f"Logged in: {me.username or me.id}")
 
-    print(f"✅ ورود موفق: @{me.username or me.id}")
+    # Create a private channel
+    print("Creating private channel...")
 
-    ok = 0
-    fail = 0
+    result = await client(
+        CreateChannelRequest(
+            title="File Transfer Storage",
+            about="Private file transfer archive",
+            megagroup=False
+        )
+    )
 
-    for i, path in enumerate(files, 1):
+    channel = result.chats[0]
 
-        name = path.name
+    print("Channel created successfully")
+    print("Channel ID:", channel.id)
 
-        if name in uploaded:
-            print(f"⏭️ [{i}/{len(files)}] قبلاً آپلود شده")
-            ok += 1
-            continue
+    files = sorted(
+        p for p in CHUNKS.iterdir()
+        if p.is_file()
+    )
 
-        size_mb = path.stat().st_size / (1024 * 1024)
+    if not files:
+        print("No chunks found")
+        await client.disconnect()
+        return 1
 
-        caption = f"{PREFIX} — {name} ({size_mb:.1f} MB)"
+    print(f"Found {len(files)} chunks")
 
-        print(
-            f"⬆️ [{i}/{len(files)}] "
-            f"{name} ({size_mb:.1f} MB)"
+    # Upload files
+    success = 0
+    failed = 0
+
+    for index, path in enumerate(files, 1):
+        size = path.stat().st_size / (1024 * 1024)
+
+        caption = (
+            f"File part {index}/{len(files)}\n"
+            f"Name: {path.name}\n"
+            f"Size: {size:.2f} MB"
         )
 
-        try:
+        print(
+            f"Uploading {index}/{len(files)}: "
+            f"{path.name}"
+        )
 
-            await client.send_file(
-                entity=CHANNEL,
-                file=str(path),
-                caption=caption,
-                attributes=[
-                    DocumentAttributeFilename(name)
-                ],
-                force_document=True,
-            )
-
-            mark_uploaded(name)
-            ok += 1
-
-            print("✅ آپلود موفق")
-
-        except FloodWaitError as e:
-
-            print(f"⏳ محدودیت تلگرام: {e.seconds} ثانیه")
-
-            await asyncio.sleep(e.seconds + 2)
-
+        while True:
             try:
-
                 await client.send_file(
-                    entity=CHANNEL,
+                    entity=channel,
                     file=str(path),
                     caption=caption,
-                    attributes=[
-                        DocumentAttributeFilename(name)
-                    ],
                     force_document=True,
+                    attributes=[
+                        DocumentAttributeFilename(path.name)
+                    ],
+                    part_size_kb=512
                 )
 
-                mark_uploaded(name)
-                ok += 1
+                success += 1
+                print("Upload successful")
+                break
 
-                print("✅ آپلود موفق پس از انتظار")
+            except FloodWaitError as error:
+                print(
+                    f"FloodWait: waiting "
+                    f"{error.seconds} seconds"
+                )
+                await asyncio.sleep(error.seconds + 2)
 
             except Exception as error:
-                fail += 1
-                print(f"❌ خطا: {error}")
+                failed += 1
+                print(
+                    f"Upload failed: "
+                    f"{type(error).__name__}: {error}"
+                )
+                break
 
-        except Exception as error:
-
-            fail += 1
-
-            print(
-                f"❌ {type(error).__name__}: {error}"
-            )
+    print("\n========== RESULT ==========")
+    print("Channel:", channel.title)
+    print("Channel ID:", channel.id)
+    print("Success:", success)
+    print("Failed:", failed)
 
     await client.disconnect()
 
-    print("\n========== نتیجه ==========")
-    print(f"موفق: {ok}")
-    print(f"ناموفق: {fail}")
-
-    return 0 if fail == 0 else 1
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    raise SystemExit(asyncio.run(main()))
