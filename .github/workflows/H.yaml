@@ -1,5 +1,5 @@
 
-name: Download Raw Malware Sample
+name: Inspect Suspicious Domain Redirect
 
 on:
   workflow_dispatch:
@@ -8,57 +8,61 @@ permissions:
   contents: read
 
 jobs:
-  collect:
+  inspect:
     runs-on: windows-latest
-    timeout-minutes: 5
 
     steps:
-      - name: Create Lab
+      - name: Prepare lab directory
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force C:\Lab
+          New-Item -ItemType Directory -Force -Path C:\Lab | Out-Null
 
-      - name: Fetch raw responses only
+      - name: Inspect HTTPS response without following redirects
         shell: pwsh
         run: |
           $url = "https://get.activate.win/"
 
-          # Ordinary HTTP client response
-          curl.exe -sS -L `
-            --max-redirs 3 `
-            --max-time 60 `
-            --proto "=https" `
-            --proto-redir "=https" `
-            -D C:\Lab\browser_headers.txt `
-            -o C:\Lab\browser_response.bin `
-            -w "Browser HTTP status: %{http_code}`n" `
-            $url
+          Write-Host "Target: $url"
 
-          # PowerShell-like User-Agent response
-          curl.exe -sS -L `
-            --max-redirs 3 `
-            --max-time 60 `
-            --proto "=https" `
-            --proto-redir "=https" `
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WindowsPowerShell/5.1" `
-            -D C:\Lab\powershell_headers.txt `
-            -o C:\Lab\powershell_response.bin `
-            -w "PowerShell UA HTTP status: %{http_code}`n" `
-            $url
+          curl.exe `
+            --silent `
+            --show-error `
+            --max-time 25 `
+            --max-redirs 0 `
+            --dump-header C:\Lab\response_headers.txt `
+            --output NUL `
+            --write-out "HTTP status: %{http_code}`nRedirect target: %{redirect_url}`n" `
+            "$url"
 
-          # Hashes and file sizes
-          Get-ChildItem C:\Lab -File |
-            ForEach-Object {
-              Write-Host "File: $($_.Name)"
-              Write-Host "Size: $($_.Length)"
-              Get-FileHash $_.FullName -Algorithm SHA256
-            }
+          Write-Host "`n--- Response headers ---"
 
-      - name: Upload raw files
+          if (Test-Path C:\Lab\response_headers.txt) {
+            Get-Content C:\Lab\response_headers.txt
+          }
+
+      - name: Save inspection metadata
+        if: always()
+        shell: pwsh
+        run: |
+          $file = "C:\Lab\response_headers.txt"
+
+          if (Test-Path $file) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+            $size = (Get-Item $file).Length
+
+            @"
+          Target: https://get.activate.win/
+          Collected: $(Get-Date -Format o)
+          Header file size: $size
+          Header SHA256: $hash
+          "@ | Out-File C:\Lab\metadata.txt -Encoding utf8
+          }
+
+      - name: Upload inspection results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raw-malware-responses
+          name: redirect-inspection
           path: C:\Lab\
-          retention-days: 1
           if-no-files-found: warn
+          retention-days: 3
