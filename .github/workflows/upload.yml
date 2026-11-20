@@ -5,17 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Magnet link یا URL مستقیم'
+        description: "Magnet link or direct URL"
         required: true
-        default: 'magnet:?xt=urn:btih:0e1610f5c681bbe8e908ddb7f73dc890899994f4&dn=gta%20v%20source%20code&tr=udp%3a%2f%2ftracker.opentrackr.org%3a1337%2fannounce'
       chunk_mb:
-        description: 'اندازه هر تکه (مگابایت)'
+        description: "Chunk size in MB (max 1900)"
         required: true
-        default: '1900'
-      caption_prefix:
-        description: 'پیشوند کپشن'
-        required: false
-        default: 'GTAVSP'
+        default: "1900"
 
 jobs:
   transfer:
@@ -26,72 +21,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: نصب پیش‌نیازها
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 python3-pip
-          pip install --quiet telethon
+          sudo apt-get install -y aria2
+          pip install telethon
 
-      - name: دانلود
+      - name: Download
         env:
-          SOURCE: ${{ github.event.inputs.source }}
+          SOURCE: ${{ inputs.source }}
         run: |
           mkdir -p downloads chunks
 
-          echo "▶️ شروع دانلود:"
-          echo "$SOURCE"
+          aria2c \
+            --dir=downloads \
+            --seed-time=0 \
+            --file-allocation=none \
+            --max-connection-per-server=16 \
+            --bt-max-peers=100 \
+            --summary-interval=30 \
+            "$SOURCE"
 
-          if [[ "$SOURCE" == magnet:* ]]; then
-            aria2c \
-              --dir=downloads \
-              --seed-time=0 \
-              --file-allocation=none \
-              --max-connection-per-server=16 \
-              --bt-max-peers=100 \
-              --summary-interval=30 \
-              --console-log-level=warn \
-              "$SOURCE"
-          else
-            aria2c \
-              --dir=downloads \
-              --file-allocation=none \
-              --max-connection-per-server=16 \
-              --summary-interval=30 \
-              --console-log-level=warn \
-              "$SOURCE"
-          fi
-
-          echo "✅ دانلود تمام شد."
-
-          echo "📁 فایل‌های دانلود شده:"
-          find downloads -type f -printf '%p (%s bytes)\n'
+          echo "Download completed"
 
           if ! find downloads -type f -print -quit | grep -q .; then
-            echo "❌ هیچ فایلی دانلود نشده است."
+            echo "No downloaded files"
             exit 1
           fi
 
-      - name: تقسیم فایل‌ها
+      - name: Split files
         env:
-          CHUNK_MB: ${{ github.event.inputs.chunk_mb }}
+          CHUNK_MB: ${{ inputs.chunk_mb }}
         run: |
           set -euo pipefail
 
-          mkdir -p chunks
-
-          if ! [[ "$CHUNK_MB" =~ ^[0-9]+$ ]] || [ "$CHUNK_MB" -lt 1 ] || [ "$CHUNK_MB" -gt 1900 ]; then
-            echo "❌ اندازه تکه باید بین 1 تا 1900 مگابایت باشد."
-            exit 1
-          fi
-
-          echo "✂️ شروع تقسیم فایل‌ها..."
+          [[ "$CHUNK_MB" =~ ^[0-9]+$ ]] &&
+          [ "$CHUNK_MB" -ge 1 ] &&
+          [ "$CHUNK_MB" -le 1900 ]
 
           find downloads -type f -print0 |
           while IFS= read -r -d '' file; do
-
             filename=$(basename "$file")
-
-            echo "📦 فایل: $file"
 
             split \
               -b "${CHUNK_MB}M" \
@@ -100,30 +70,20 @@ jobs:
               --suffix-length=3 \
               "$file" \
               "chunks/${filename}.part_"
-
           done
-
-          echo "📊 نتیجه تقسیم:"
-
-          find chunks -type f -printf '%f (%s bytes)\n'
 
           COUNT=$(find chunks -type f | wc -l)
 
-          echo "تعداد تکه‌ها: $COUNT"
+          echo "Chunks created: $COUNT"
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ هیچ تکه‌ای ساخته نشد."
             exit 1
           fi
 
-          echo "✅ تقسیم فایل‌ها موفق بود."
-
-      - name: آپلود به تلگرام
+      - name: Create channel and upload
         env:
           API_ID: ${{ secrets.TELEGRAM_API_ID }}
           API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
-          CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          CAPTION_PREFIX: ${{ github.event.inputs.caption_prefix }}
         run: |
-          python3 scripts/upload.py
+          python3 scripts/transfer.py
