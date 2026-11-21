@@ -1,5 +1,5 @@
 
-name: تلگرام دانلودر
+name: تلگرام دانلودر 1
 
 on:
   workflow_dispatch:
