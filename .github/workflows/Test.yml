@@ -1,0 +1,73 @@
+
+name: Telegram Downloader API Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_link:
+        description: 'Telegram public post link'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install requests
+
+      - name: Test Telegram Downloader API
+        env:
+          TELEGRAM_LINK: ${{ inputs.telegram_link }}
+        run: |
+          python3 - <<'PY'
+          import requests
+          import os
+
+          url = "https://telegramdownloader.net/proxy.php"
+
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
+              "Accept": "application/json, text/plain, */*",
+              "Origin": "https://telegramdownloader.net",
+              "Referer": "https://telegramdownloader.net/"
+          }
+
+          data = {
+              "telegram_link": os.environ["TELEGRAM_LINK"]
+          }
+
+          try:
+              print("Connecting to API...")
+
+              response = requests.post(
+                  url,
+                  headers=headers,
+                  data=data,
+                  timeout=30
+              )
+
+              print("\n========== API RESULT ==========")
+              print("HTTP Status:", response.status_code)
+              print("Content-Type:", response.headers.get("Content-Type"))
+              print("Response:")
+              print(response.text[:5000])
+              print("================================")
+
+              response.raise_for_status()
+
+          except requests.exceptions.HTTPError as e:
+              print("HTTP ERROR:", e)
+              raise
+
+          except Exception as e:
+              print("ERROR:", str(e))
+              raise
+          PY
