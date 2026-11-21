@@ -1,0 +1,194 @@
+
+name: تلگرام دانلودر
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_link:
+        description: '🔗 Telegram post link'
+        required: true
+        type: string
+
+      split_threshold_mb:
+        description: '📦 Maximum size per part (MB) - 0 disables splitting'
+        required: false
+        type: number
+        default: 90
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📂 Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🔧 Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3 \
+            python3-pip \
+            zip \
+            unzip \
+            git
+
+          python3 -m pip install --break-system-packages requests
+
+      - name: 🔍 Check downloader script
+        run: |
+          if [ ! -f telegram_downloader.py ]; then
+            echo "❌ telegram_downloader.py not found!"
+            exit 1
+          fi
+
+          python3 -m py_compile telegram_downloader.py
+          echo "✅ Downloader script is ready"
+
+      - name: 📥 Download Telegram file using proxy
+        id: download
+        env:
+          TELEGRAM_LINK: ${{ inputs.telegram_link }}
+        run: |
+          mkdir -p downloads
+
+          python3 telegram_downloader.py \
+            "$TELEGRAM_LINK" \
+            downloads
+
+          if [ ! -f downloads/.download_info ]; then
+            echo "❌ Download information missing!"
+            exit 1
+          fi
+
+          FILENAME=$(head -n1 downloads/.download_info)
+          FILESIZE=$(tail -n1 downloads/.download_info)
+
+          echo "downloaded_name=$FILENAME" >> "$GITHUB_OUTPUT"
+          echo "file_size=$FILESIZE" >> "$GITHUB_OUTPUT"
+
+          rm downloads/.download_info
+
+          echo "✅ Download finished"
+          echo "File: $FILENAME"
+          echo "Size: $FILESIZE bytes"
+
+      - name: ✂️ Split large files
+        env:
+          THRESHOLD: ${{ inputs.split_threshold_mb }}
+          FILENAME: ${{ steps.download.outputs.downloaded_name }}
+          FILESIZE: ${{ steps.download.outputs.file_size }}
+        run: |
+          LIMIT=$((THRESHOLD * 1024 * 1024))
+
+          if [ "$THRESHOLD" -eq 0 ]; then
+            echo "📦 Splitting disabled"
+            exit 0
+          fi
+
+          if [ "$FILESIZE" -gt "$LIMIT" ]; then
+            echo "✂️ Splitting file..."
+
+            cd downloads
+
+            zip -s "${THRESHOLD}m" \
+              "${FILENAME}.zip" \
+              -j "$FILENAME"
+
+            if [ $? -ne 0 ]; then
+              echo "❌ ZIP splitting failed"
+              exit 1
+            fi
+
+            rm "$FILENAME"
+
+            cd ..
+
+            echo "✅ Splitting completed"
+          else
+            echo "📦 File is below threshold"
+          fi
+
+      - name: 🧹 Sanitize filenames
+        run: |
+          cd downloads
+
+          for file in *; do
+            [ -f "$file" ] || continue
+
+            CLEAN_NAME=$(python3 -c \
+              'import sys,re; print(re.sub(r"[^a-zA-Z0-9._-]", "_", sys.argv[1]))' \
+              "$file")
+
+            if [ "$file" != "$CLEAN_NAME" ]; then
+              mv -- "$file" "$CLEAN_NAME"
+              echo "Renamed: $file -> $CLEAN_NAME"
+            fi
+          done
+
+          cd ..
+
+      - name: 📤 Upload files to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "github-actions[bot]@users.noreply.github.com"
+
+          if [ -z "$(find downloads -maxdepth 1 -type f -print -quit)" ]; then
+            echo "❌ No files to upload"
+            exit 1
+          fi
+
+          git add downloads/
+
+          if git diff --cached --quiet; then
+            echo "ℹ️ No new changes"
+            exit 0
+          fi
+
+          git commit -m "Add Telegram download [skip ci]"
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "✅ Upload successful"
+              exit 0
+            fi
+
+            echo "⚠️ Push attempt $attempt failed"
+
+            git rebase --abort || true
+
+            if [ "$attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+
+          echo "❌ Upload failed"
+          exit 1
+
+      - name: 📊 Download summary
+        if: always()
+        run: |
+          echo "================================"
+          echo "       TELEGRAM DOWNLOADER"
+          echo "================================"
+          echo "Status: ${{ job.status }}"
+          echo "================================"
+
+          if [ -d downloads ]; then
+            echo "Files:"
+            ls -lh downloads/ || true
+          fi
+          
